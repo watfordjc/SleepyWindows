@@ -1,0 +1,2 @@
+﻿GetSystemPowerStatus
+SYSTEM_POWER_STATUS
