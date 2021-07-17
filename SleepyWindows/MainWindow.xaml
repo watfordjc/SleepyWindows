@@ -5,10 +5,45 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:uk.JohnCook.dotnet.SleepyWindows"
         mc:Ignorable="d"
-        Title="Sleepy Windows" Height="450" Width="800">
+        Title="Sleepy Windows" Height="450" Width="800"
+        FontFamily="OpenSans" FontSize="14" Closing="Window_Closing">
     <Grid>
-        <GroupBox Header="Power Config State" Height="169" VerticalAlignment="Top">
-            <TextBox x:Name="txtPowerConfigState" Margin="10,0,0,0" TextWrapping="Wrap" HorizontalAlignment="Left" Width="765"/>
+        <GroupBox Header="Power Configuration Profile" Height="auto" VerticalAlignment="Top" Margin="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="auto" />
+                    <ColumnDefinition Width="auto" />
+                    <ColumnDefinition Width="auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="auto" />
+                    <RowDefinition Height="auto" />
+                    <RowDefinition Height="auto" />
+                    <RowDefinition Height="auto" />
+                    <RowDefinition Height="auto" />
+                </Grid.RowDefinitions>
+                <Label Grid.Row="0" Grid.Column="0" Content="Power Plan:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="Unknown" x:Name="tbPowerPlan" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="1" Grid.Column="0" Content="Video Timeout:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="Unknown" x:Name="tbVideoTimeout" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                <Label Grid.Row="2" Grid.Column="0" Content="Disk Timeout:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="Unknown" x:Name="tbDiskTimeout" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                <Label Grid.Row="3" Grid.Column="0" Content="Idle Threshold:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="Unknown" x:Name="tbIdleThreshold" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="4" Grid.Column="0" Content="Idle Timeout:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="4" Grid.Column="1" Text="Unknown" x:Name="tbIdleTimeout" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="0" Grid.Column="2" Content="On Idle:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="0" Grid.Column="3" Text="Unknown" x:Name="tbIdleAction" HorizontalAlignment="Left" VerticalAlignment="Center" />
+                <Label Grid.Row="1" Grid.Column="2" Content="On Sleep Button:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="1" Grid.Column="3" Text="Unknown" x:Name="tbSleepButtonAction" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="2" Grid.Column="2" Content="On Power Button:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="2" Grid.Column="3" Text="Unknown" x:Name="tbPowerButtonAction" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="3" Grid.Column="2" Content="On Lid Close:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="3" Grid.Column="3" Text="Unknown" x:Name="tbLidCloseAction" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" />
+                <Label Grid.Row="4" Grid.Column="2" Content="S3 to S4 Timeout:" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4 0 2 0" />
+                <TextBlock Grid.Row="4" Grid.Column="3" Text="Unknown" x:Name="tbS3S4Timeout" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="0 0 16 0" Loaded="Window_Loaded" />
+            </Grid>
         </GroupBox>
     </Grid>
 </Window>
