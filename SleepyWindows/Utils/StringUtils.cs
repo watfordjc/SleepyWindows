@@ -17,7 +17,7 @@ namespace uk.JohnCook.dotnet.SleepyWindows.Utils
         {
             return action switch
             {
-                Windows.Win32.System.Power.POWER_ACTION.PowerActionNone => "None",
+                Windows.Win32.System.Power.POWER_ACTION.PowerActionNone => "Do nothing",
                 Windows.Win32.System.Power.POWER_ACTION.PowerActionSleep => "Sleep",
                 Windows.Win32.System.Power.POWER_ACTION.PowerActionHibernate => "Hibernate",
                 Windows.Win32.System.Power.POWER_ACTION.PowerActionShutdown => "Shutdown",

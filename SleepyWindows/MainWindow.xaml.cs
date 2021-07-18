@@ -31,6 +31,12 @@ namespace uk.JohnCook.dotnet.SleepyWindows
     {
         private Guid currentPowerScheme;
         private void* effectivePowerModeCallback;
+        private Windows.Win32.System.Power.DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS deviceNotifySubscribeParameters = new() { Context = null, Callback = OnPowerSettingChanged };
+        private readonly IntPtr unmanagedDeviceNotifySubscribeParameters;
+        private readonly DeviceNotifyCallbackRoutineSafeHandle deviceNotifyCallbackRoutineSafeHandle;
+        private readonly List<KeyValuePair<Guid, IntPtr>> powerNotificationCallbacks = new();
+        private readonly List<KeyValuePair<Guid, IntPtr>> powerSettingCallbacks = new();
+        private static WeakReference<MainWindow>? weakReference;
 
         #region Events
         /// <summary>
@@ -50,7 +56,11 @@ namespace uk.JohnCook.dotnet.SleepyWindows
         /// </summary>
         public MainWindow()
         {
+            unmanagedDeviceNotifySubscribeParameters = Marshal.AllocHGlobal(Marshal.SizeOf(deviceNotifySubscribeParameters));
+            Marshal.StructureToPtr(deviceNotifySubscribeParameters, unmanagedDeviceNotifySubscribeParameters, false);
+            deviceNotifyCallbackRoutineSafeHandle = new(unmanagedDeviceNotifySubscribeParameters);
             InitializeComponent();
+            weakReference = new(this);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -73,6 +83,7 @@ namespace uk.JohnCook.dotnet.SleepyWindows
             {
                 // Get the current power profile
                 GetPowerProfile();
+                AddPowerPolicyChangeHandlers();
             }
         }
 
@@ -90,10 +101,209 @@ namespace uk.JohnCook.dotnet.SleepyWindows
                 }
                 effectivePowerModeCallback = null;
             }
+            foreach (KeyValuePair<Guid, IntPtr> callbackHandle in powerNotificationCallbacks)
+            {
+                if (!ErrorUtils.IsSuccess(PInvoke.PowerSettingUnregisterNotification((Windows.Win32.System.Power.HPOWERNOTIFY)callbackHandle.Value)))
+                {
+                    Debug.WriteLine($"Unable to unregister power setting change notification callback for GUID {callbackHandle.Value}");
+                }
+            }
+            foreach (KeyValuePair<Guid, IntPtr> callbackHandle in powerSettingCallbacks)
+            {
+                if (!ErrorUtils.IsSuccess(PInvoke.PowerSettingUnregisterNotification((Windows.Win32.System.Power.HPOWERNOTIFY)callbackHandle.Value)))
+                {
+                    Debug.WriteLine($"Unable to unregister power setting change notification callback for GUID {callbackHandle.Value}");
+                }
+            }
+            powerSettingCallbacks.Clear();
+            Marshal.FreeHGlobal(unmanagedDeviceNotifySubscribeParameters);
             SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
             SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            HwndSource? hwndSource = PresentationSource.FromVisual(this) as HwndSource;
+            hwndSource?.AddHook(WndProc);
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            switch ((uint)msg)
+            {
+                case Constants.WM_POWERBROADCAST:
+                    _ = OnPowerSettingChanged(null, (uint)wParam, (void*)lParam);
+                    break;
+                default:
+                    break;
+            }
+            return IntPtr.Zero;
+        }
+
+        private unsafe void AddPowerPolicyChangeHandlers()
+        {
+            List<Guid> desiredPowerNotificationSubscriptions = new()
+            {
+                PowerNotificationGuids.PowerSchemePersonality
+            };
+            foreach (Guid notificationGuid in desiredPowerNotificationSubscriptions)
+            {
+                if (ErrorUtils.IsSuccess(PInvoke.PowerSettingRegisterNotification(notificationGuid, Windows.Win32.System.Power.POWER_SETTING_REGISTER_NOTIFICATION_FLAGS.DEVICE_NOTIFY_CALLBACK, deviceNotifyCallbackRoutineSafeHandle, out void* powerNotificationCallbackHandle)))
+                {
+                    powerNotificationCallbacks.Add(new(notificationGuid, (IntPtr)powerNotificationCallbackHandle));
+                    bool knownSetting = KnownGuids.Descriptions.TryGetValue(notificationGuid, out KeyValuePair<Type, string> notificationDescription);
+                    Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Power Notification Callback Added: {0}", knownSetting ? notificationDescription.Value : notificationGuid));
+                }
+            }
+
+            List<Guid> desiredPowerChangeSettingSubscriptions = new()
+            {
+                PowerSchemeSettingGuids.Display.DisplayIdleTimeout,
+                PowerSchemeSettingGuids.Disk.DiskIdleTimeout,
+                PowerSchemeSettingGuids.Sleep.StandbyIdleTimeout,
+                PowerSchemeSettingGuids.PowerButtonLid.SleepButtonAction,
+                PowerSchemeSettingGuids.PowerButtonLid.PowerButtonAction,
+                PowerSchemeSettingGuids.PowerButtonLid.LidCloseAction,
+                PowerSchemeSettingGuids.Sleep.HibernateIdleTimeout
+            };
+            List<Guid> currentSchemeSubgroups = new();
+            uint index = 0;
+            uint bufferSize = 0;
+            Debug.WriteLine($"Current Power Scheme GUID: {currentPowerScheme}");
+            while ((Windows.Win32.System.Diagnostics.Debug.WIN32_ERROR)PInvoke.PowerEnumerate(null, currentPowerScheme, null, Windows.Win32.System.Power.POWER_DATA_ACCESSOR.ACCESS_SUBGROUP, index, null, ref bufferSize) == Windows.Win32.System.Diagnostics.Debug.WIN32_ERROR.ERROR_MORE_DATA)
+            {
+                IntPtr buffer = Marshal.AllocHGlobal((int)bufferSize);
+                _ = PInvoke.PowerEnumerate(null, currentPowerScheme, null, Windows.Win32.System.Power.POWER_DATA_ACCESSOR.ACCESS_SUBGROUP, index, (byte*)buffer, ref bufferSize);
+                byte[] bufferManaged = new byte[bufferSize];
+                Marshal.Copy(buffer, bufferManaged, 0, (int)bufferSize);
+                Marshal.FreeHGlobal(buffer);
+                Guid guid = new(bufferManaged);
+                if (!currentSchemeSubgroups.Contains(guid))
+                {
+                    currentSchemeSubgroups.Add(guid);
+                }
+                index++;
+            }
+            List<Guid> currentSchemePowerSettings = new();
+            foreach (Guid subgroupGuid in currentSchemeSubgroups)
+            {
+                bool knownSubgroup = KnownGuids.Descriptions.TryGetValue(subgroupGuid, out KeyValuePair<Type, string> subgroupDescription);
+                Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Parsing {0}Power Scheme Sub-Group {1}...", knownSubgroup ? "" : "Unknown ", knownSubgroup ? subgroupDescription.Value : subgroupGuid));
+                index = 0;
+                while ((Windows.Win32.System.Diagnostics.Debug.WIN32_ERROR)PInvoke.PowerEnumerate(null, currentPowerScheme, subgroupGuid, Windows.Win32.System.Power.POWER_DATA_ACCESSOR.ACCESS_INDIVIDUAL_SETTING, index, null, ref bufferSize) == Windows.Win32.System.Diagnostics.Debug.WIN32_ERROR.ERROR_MORE_DATA)
+                {
+                    IntPtr buffer = Marshal.AllocHGlobal((int)bufferSize);
+                    _ = PInvoke.PowerEnumerate(null, currentPowerScheme, subgroupGuid, Windows.Win32.System.Power.POWER_DATA_ACCESSOR.ACCESS_INDIVIDUAL_SETTING, index, (byte*)buffer, ref bufferSize);
+                    byte[] bufferManaged = new byte[bufferSize];
+                    Marshal.Copy(buffer, bufferManaged, 0, (int)bufferSize);
+                    Marshal.FreeHGlobal(buffer);
+                    Guid guid = new(bufferManaged);
+                    if (!currentSchemePowerSettings.Contains(guid))
+                    {
+                        currentSchemePowerSettings.Add(guid);
+                    }
+                    bool knownSetting = KnownGuids.Descriptions.TryGetValue(guid, out KeyValuePair<Type, string> settingDescription);
+                    Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Found Power Setting: {0}/{1}", knownSubgroup ? subgroupDescription.Value : subgroupGuid, knownSetting ? settingDescription.Value : guid));
+                    index++;
+                }
+            }
+            foreach (Guid settingGuid in desiredPowerChangeSettingSubscriptions)
+            {
+                if (currentSchemePowerSettings.Contains(settingGuid) && ErrorUtils.IsSuccess(PInvoke.PowerSettingRegisterNotification(settingGuid, Windows.Win32.System.Power.POWER_SETTING_REGISTER_NOTIFICATION_FLAGS.DEVICE_NOTIFY_CALLBACK, deviceNotifyCallbackRoutineSafeHandle, out void* powerSettingCallbackHandle)))
+                {
+                    powerSettingCallbacks.Add(new(settingGuid, (IntPtr)powerSettingCallbackHandle));
+                    bool knownSetting = KnownGuids.Descriptions.TryGetValue(settingGuid, out KeyValuePair<Type, string> settingDescription);
+                    Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Power Setting Change Callback Added: {0}/{1}", knownSetting ? settingDescription.Key.Name : "Unknown", knownSetting ? settingDescription.Value : settingGuid));
+                }
+            }
+        }
+
+        private class DeviceNotifyCallbackRoutineSafeHandle : SafeHandle
+        {
+            public DeviceNotifyCallbackRoutineSafeHandle() : base(IntPtr.Zero, true)
+            {
+            }
+
+            public DeviceNotifyCallbackRoutineSafeHandle(IntPtr handle) : base(IntPtr.Zero, true)
+            {
+                this.handle = handle;
+            }
+
+            public override bool IsInvalid => handle == IntPtr.Zero;
+
+            protected override bool ReleaseHandle()
+            {
+                return true;
+            }
+        }
+
+        private static uint OnPowerSettingChanged(void* context, uint eventType, void* setting)
+        {
+            switch (eventType)
+            {
+                case Constants.PBT_POWERSETTINGCHANGE:
+                    Windows.Win32.System.Power.POWERBROADCAST_SETTING settingChange
+                        = Marshal.PtrToStructure<Windows.Win32.System.Power.POWERBROADCAST_SETTING>((IntPtr)setting);
+                    bool knownSetting = KnownGuids.Descriptions.TryGetValue(settingChange.PowerSetting, out KeyValuePair<Type, string> settingDescription);
+                    Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Power settings changed: {0}/{1}", knownSetting ? settingDescription.Key.Name : "Unknown", knownSetting ? settingDescription.Value : settingChange.PowerSetting));
+                    MainWindow? window = null;
+                    _ = weakReference?.TryGetTarget(out window);
+                    if (knownSetting && window != null)
+                    {
+                        int bufferOffset = (int)Marshal.OffsetOf<Windows.Win32.System.Power.POWERBROADCAST_SETTING>("Data");
+                        IntPtr buffer = (IntPtr)setting + bufferOffset;
+
+                        if (settingChange.PowerSetting == PowerNotificationGuids.PowerSchemePersonality)
+                        {
+                            byte[] guidBytes = new byte[settingChange.DataLength];
+                            Marshal.Copy(buffer, guidBytes, 0, (int)settingChange.DataLength);
+                            Guid guid = new Guid(guidBytes);
+                            _ = window.Dispatcher.Invoke(() => window.tbPowerPlan.Text = StringUtils.GetEffectivePowerModeString(guid));
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.Display.DisplayIdleTimeout)
+                        {
+                            int seconds = Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbVideoTimeout.Text = seconds == 0 ? "Never" : new TimeSpan(0, 0, seconds).ToString());
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.Disk.DiskIdleTimeout)
+                        {
+                            int seconds = Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbDiskTimeout.Text = seconds == 0 ? "Never" : new TimeSpan(0, 0, seconds).ToString());
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.Sleep.StandbyIdleTimeout)
+                        {
+                            int seconds = Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbIdleTimeout.Text = seconds == 0 ? "Never" : new TimeSpan(0, 0, seconds).ToString());
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.Sleep.HibernateIdleTimeout)
+                        {
+                            int seconds = Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbS3S4Timeout.Text = seconds == 0 ? "Never" : new TimeSpan(0, 0, seconds).ToString());
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.PowerButtonLid.SleepButtonAction)
+                        {
+                            Windows.Win32.System.Power.POWER_ACTION action = (Windows.Win32.System.Power.POWER_ACTION)Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbSleepButtonAction.Text = StringUtils.PowerActionToDescription(action));
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.PowerButtonLid.PowerButtonAction)
+                        {
+                            Windows.Win32.System.Power.POWER_ACTION action = (Windows.Win32.System.Power.POWER_ACTION)Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbPowerButtonAction.Text = StringUtils.PowerActionToDescription(action));
+                        }
+                        else if (settingChange.PowerSetting == PowerSchemeSettingGuids.PowerButtonLid.LidCloseAction)
+                        {
+                            Windows.Win32.System.Power.POWER_ACTION action = (Windows.Win32.System.Power.POWER_ACTION)Marshal.ReadInt32(buffer);
+                            _ = window.Dispatcher.Invoke(() => window.tbLidCloseAction.Text = StringUtils.PowerActionToDescription(action));
+                        }
+                    }
+                    break;
+                default:
+                    Debug.WriteLine($"Power settings changed? Unhandled EventType: {eventType}");
+                    break;
+            }
+            return 0;
+        }
         #endregion
 
         #region Power Mode Changed
@@ -135,10 +345,15 @@ namespace uk.JohnCook.dotnet.SleepyWindows
         /// <inheritdoc cref="Windows.Win32.System.Power.EFFECTIVE_POWER_MODE_CALLBACK"/>
         private void OnEffectivePowerModeChanged(Windows.Win32.System.Power.EFFECTIVE_POWER_MODE effectivePowerMode, void* context)
         {
+            bool addPowerPolicyChangeHandlers = currentPowerScheme == Guid.Empty;
             Debug.WriteLine(string.Format(CultureInfo.CurrentCulture, "Effective Power Mode Changed - {0}", effectivePowerMode.ToString()));
             string effectivePowerModeString = StringUtils.GetEffectivePowerModeString(effectivePowerMode);
             _ = Dispatcher.Invoke(() => tbPowerPlan.Text = effectivePowerModeString, System.Windows.Threading.DispatcherPriority.Normal);
             GetPowerProfile();
+            if (addPowerPolicyChangeHandlers)
+            {
+                AddPowerPolicyChangeHandlers();
+            }
         }
 
         #endregion
@@ -191,7 +406,6 @@ namespace uk.JohnCook.dotnet.SleepyWindows
             uint win32ErrorCode;
             int ntStatus;
 
-
             win32ErrorCode = PInvoke.PowerGetActiveScheme(null, out Guid* activePolicyGuid);
             if (ErrorUtils.IsSuccess(win32ErrorCode))
             {
@@ -204,7 +418,6 @@ namespace uk.JohnCook.dotnet.SleepyWindows
                     _ = PInvoke.LocalFree((IntPtr)activePolicyGuid);
                 }
             }
-
 
             // Get the current power policy and update the UI
             Windows.Win32.System.Power.SYSTEM_POWER_POLICY currentPowerPolicy = new();
@@ -222,16 +435,8 @@ namespace uk.JohnCook.dotnet.SleepyWindows
         /// <param name="currentPowerPolicy">A <see cref="Windows.Win32.System.Power.SYSTEM_POWER_POLICY"/>.</param>
         private void UpdatePowerPolicyUI(Windows.Win32.System.Power.SYSTEM_POWER_POLICY currentPowerPolicy)
         {
-            tbVideoTimeout.Text = new TimeSpan(0, 0, (int)currentPowerPolicy.VideoTimeout).ToString();
-            tbDiskTimeout.Text = new TimeSpan(0, 0, (int)currentPowerPolicy.SpindownTimeout).ToString();
             tbIdleThreshold.Text = string.Format(CultureInfo.CurrentCulture, "{0}%", currentPowerPolicy.IdleSensitivity);
-            tbIdleTimeout.Text = new TimeSpan(0, 0, (int)currentPowerPolicy.IdleTimeout).ToString();
             tbIdleAction.Text = StringUtils.PowerActionToDescription(currentPowerPolicy.Idle.Action);
-            tbSleepButtonAction.Text = StringUtils.PowerActionToDescription(currentPowerPolicy.SleepButton.Action);
-            tbPowerButtonAction.Text = StringUtils.PowerActionToDescription(currentPowerPolicy.PowerButton.Action);
-            tbLidCloseAction.Text = StringUtils.PowerActionToDescription(currentPowerPolicy.LidClose.Action);
-            int dozeS4Timeout = (int)currentPowerPolicy.DozeS4Timeout;
-            tbS3S4Timeout.Text = dozeS4Timeout == 0 ? "Never" : new TimeSpan(0, 0, dozeS4Timeout).ToString();
         }
 
         #endregion
